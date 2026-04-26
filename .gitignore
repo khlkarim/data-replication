@@ -1,0 +1,8 @@
+.env
+.mvn
+.settings
+.idea
+.vscode
+target
+.project
+.classpath
