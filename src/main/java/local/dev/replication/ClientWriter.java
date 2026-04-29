@@ -29,7 +29,7 @@ public class ClientWriter {
             }
 
             channel.basicPublish(EXCHANGE_NAME, "", null, line.getBytes(StandardCharsets.UTF_8));
-            System.out.println("Sent :" + line);
+            System.out.println("Sent: " + line);
         }
 
         scanner.close();

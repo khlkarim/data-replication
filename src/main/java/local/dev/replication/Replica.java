@@ -2,11 +2,16 @@ package local.dev.replication;
 
 import com.rabbitmq.client.*;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.util.Base64;
 import java.util.List;
 import java.util.Scanner;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -67,28 +72,81 @@ public class Replica {
         });
 
         DeliverCallback readCallback = (consumerTag, delivery) -> {
-            String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
-            System.out.println("Received read request: " + message);
+            String body = new String(delivery.getBody(), StandardCharsets.UTF_8);
 
-            String lastLine = "";
             try {
-                File file = new File(filePath);
+                Message message = decodeMessage(body);
 
-                if (file.exists()) {
-                    List<String> lines = Files.readAllLines(Paths.get(filePath));
-                    if (!lines.isEmpty()) {
-                        lastLine = lines.get(lines.size() - 1);
+                if (message.getAction() == Message.Action.READ_LAST) {
+                    System.out.println("Received a read last request from: " + message.getReplyTo());
+
+                    String lastLine = "";
+                    try {
+                        File file = new File(filePath);
+
+                        if (file.exists()) {
+                            List<String> lines = Files.readAllLines(Paths.get(filePath));
+                            if (!lines.isEmpty()) {
+                                lastLine = lines.get(lines.size() - 1);
+                            }
+                        }
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+
+                    System.out.println("Replying with: " + lastLine);
+
+                    Message reply = new Message(message.getAction(), replicaId, lastLine);
+                    channel.basicPublish(REPLY_EXCHANGE_NAME, message.getReplyTo(), null,
+                            encodeMessage(reply).getBytes(StandardCharsets.UTF_8));
+
+                } else if (message.getAction() == Message.Action.READ_ALL) {
+                    System.out.println("Received a read all request from: " + message.getReplyTo());
+
+                    try {
+                        File file = new File(filePath);
+
+                        if (file.exists()) {
+                            List<String> lines = Files.readAllLines(Paths.get(filePath));
+                            if (!lines.isEmpty()) {
+                                for (String l : lines) {
+                                    System.out.println("Replying with: " + l);
+
+                                    Message reply = new Message(message.getAction(), replicaId, l);
+                                    channel.basicPublish(REPLY_EXCHANGE_NAME, message.getReplyTo(), null,
+                                            encodeMessage(reply).getBytes(StandardCharsets.UTF_8));
+                                }
+                            }
+                        }
+                    } catch (IOException e) {
+                        e.printStackTrace();
                     }
                 }
-            } catch (IOException e) {
-                e.printStackTrace();
+            } catch (Exception e) {
+                System.out.println("Failed to parse message");
             }
 
-            System.out.println("Replying with: " + lastLine);
-            channel.basicPublish(REPLY_EXCHANGE_NAME, message, null, lastLine.getBytes(StandardCharsets.UTF_8));
         };
 
         channel.basicConsume(readQueueName, true, readCallback, consumerTag -> {
         });
+    }
+
+    public static Message decodeMessage(String s) throws IOException, ClassNotFoundException {
+        byte[] data = Base64.getDecoder().decode(s);
+        ObjectInputStream ois = new ObjectInputStream(new ByteArrayInputStream(data));
+
+        Message m = (Message) ois.readObject();
+
+        ois.close();
+        return m;
+    }
+
+    private static String encodeMessage(Message m) throws Exception {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ObjectOutputStream oos = new ObjectOutputStream(baos);
+        oos.writeObject(m);
+        oos.close();
+        return Base64.getEncoder().encodeToString(baos.toByteArray());
     }
 }
